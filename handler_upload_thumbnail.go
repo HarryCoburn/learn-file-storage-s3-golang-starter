@@ -1,10 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -43,6 +48,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Authentication and authorization finished. Proceed.
+
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
 	// Open the file and set the mediaType
@@ -56,19 +63,25 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	mediaType := header.Header.Get("Content-Type")
 	defer file.Close()
 
-	// Load the image data into a Base 64 string, then a data URL
-	thumbnailData, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Unable to parse file data", err)
+	// Is it the right kind of file?
+	typeCheck, _, err := mime.ParseMediaType(mediaType)
+	if typeCheck != "image/jpeg" && typeCheck != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "Thumbnail not an image or png", err)
 		return
 	}
 
-	thumbnailDataB64 := base64.StdEncoding.EncodeToString(thumbnailData)
+	// Grab the file extension, give the file a unique name, and build a path
+	fileExtention := strings.SplitN(mediaType, "/", 2)[1]
+	fileNameSlice := make([]byte, 32)
+	rand.Read(fileNameSlice)
+	fileName := base64.RawURLEncoding.EncodeToString(fileNameSlice)
+	filePath := filepath.Join(cfg.assetsRoot, fmt.Sprint(fileName+"."+fileExtention))
 
-	thumbnailDataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, thumbnailDataB64)
+	// Create the new file in assets.
+	assetFile, err := os.Create(filePath)
+	io.Copy(assetFile, file)
 
-	// Update the thumbnail URL
-
+	thumbnailDataURL := fmt.Sprintf("http://localhost:8091/assets/%s.%s", fileName, fileExtention)
 	fileMetadata.ThumbnailURL = &thumbnailDataURL
 
 	err = cfg.db.UpdateVideo(fileMetadata)
